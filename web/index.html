@@ -1,0 +1,580 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TCP Live Lab</title>
+<style>
+:root {
+  --bg: #f4f6f9; --panel: #ffffff; --panel-2: #eef1f5; --border: #dde2e8;
+  --text: #19202a; --muted: #5c6878; --accent: #2d5fe6; --accent-text: #ffffff;
+  --syn: #6d45e0; --data: #0e8459; --fin: #d0441a; --ack: #6a7685; --err: #c62828;
+  --est: #0e8459; --listen: #2d5fe6;
+  --console-bg: #0f141a; --console-text: #d3e2f0; --console-muted: #6f8497;
+  --lifeline: #b5bfcb;
+  --mono: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0c1015; --panel: #141a22; --panel-2: #1b232d; --border: #28313d;
+    --text: #e5ecf3; --muted: #8b98a8; --accent: #5a8bff; --accent-text: #0c1015;
+    --syn: #a68bff; --data: #3fcf91; --fin: #ff8b5c; --ack: #9aa6b4; --err: #ff6b6b;
+    --est: #3fcf91; --listen: #5a8bff;
+    --console-bg: #080b0f; --lifeline: #394452;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+.wrap { max-width: 1320px; margin: 0 auto; padding: 20px 16px 40px; }
+header h1 { margin: 0; font-size: 22px; letter-spacing: -0.01em; }
+header p { margin: 2px 0 16px; color: var(--muted); }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+h2 .note { text-transform: none; letter-spacing: 0; font-weight: 400; }
+.panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px; }
+button, input, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+
+/* ---------- controls ---------- */
+.controls { display: grid; grid-template-columns: auto 1fr 220px auto; gap: 16px; align-items: start; margin-bottom: 16px; }
+.seg { display: inline-flex; background: var(--panel-2); border: 1px solid var(--border); border-radius: 9px; padding: 3px; }
+.seg button { border: 0; background: transparent; padding: 6px 12px; border-radius: 7px; color: var(--muted); font-weight: 500; white-space: nowrap; }
+.seg button[aria-pressed="true"] { background: var(--panel); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+.field label { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-bottom: 4px; font-weight: 500; }
+.field small { color: var(--muted); font-size: 12px; }
+textarea, input[type=text] {
+  width: 100%; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+  padding: 7px 9px; font-family: var(--mono); font-size: 13px; resize: vertical;
+}
+textarea:focus, input[type=text]:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.chips { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+.chips button { border: 1px solid var(--border); background: var(--panel); border-radius: 999px; padding: 2px 10px; font-family: var(--mono); font-size: 12px; }
+input[type=range] { width: 100%; accent-color: var(--accent); }
+.actions { display: flex; flex-direction: column; gap: 8px; align-items: stretch; min-width: 150px; }
+.btn { border: 1px solid var(--border); background: var(--panel); border-radius: 8px; padding: 8px 14px; font-weight: 600; }
+.btn.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+.btn.primary.stop { background: var(--err); border-color: var(--err); color: #fff; }
+.btn:disabled { opacity: .5; cursor: default; }
+.status { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--ack); }
+.status[data-kind="run"]::before { background: var(--data); animation: pulse 1s infinite; }
+.status[data-kind="done"]::before { background: var(--accent); }
+.status[data-kind="error"]::before { background: var(--err); }
+@keyframes pulse { 50% { opacity: .3; } }
+
+/* ---------- main grid ---------- */
+.grid { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; align-items: start; }
+.side { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+
+/* ---------- ladder diagram ---------- */
+.ladder-panel { padding: 0; overflow: hidden; }
+.ladder-head { position: relative; height: 74px; border-bottom: 1px solid var(--border); background: var(--panel-2); }
+.host { position: absolute; top: 10px; width: 36%; transform: translateX(-50%); text-align: center; }
+.host.client { left: 20%; } .host.server { left: 80%; }
+.host .role { display: block; font-weight: 700; }
+.host .addr { display: block; font-family: var(--mono); font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.badge, .st {
+  display: inline-block; font: 600 10.5px/1.6 var(--mono); padding: 0 7px; border-radius: 5px;
+  border: 1px solid currentColor; color: var(--ack); background: var(--panel);
+}
+.badge { margin-top: 3px; }
+[data-fam="est"] { color: var(--est); } [data-fam="listen"] { color: var(--listen); }
+[data-fam="syn"] { color: var(--syn); } [data-fam="fin"] { color: var(--fin); }
+.badge.flash { animation: flash .6s ease-out; }
+@keyframes flash { from { box-shadow: 0 0 0 6px color-mix(in srgb, currentColor 30%, transparent); } }
+
+.ladder { position: relative; height: 600px; overflow-y: auto; overscroll-behavior: contain; }
+#rows { position: relative; min-height: 100%; padding: 8px 0 24px; }
+.lifeline { position: absolute; top: 0; bottom: 0; width: 0; border-left: 2px dashed var(--lifeline); transform: translateX(-1px); }
+.lifeline.l { left: 20%; } .lifeline.r { left: 80%; }
+.empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); pointer-events: none; text-align: center; padding: 0 24%; }
+
+.row { position: relative; }
+.row.pkt { height: 56px; } .row.pkt.tall { height: 70px; }
+.k-syn { --c: var(--syn); } .k-data { --c: var(--data); } .k-fin { --c: var(--fin); } .k-ack { --c: var(--ack); }
+.row svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.row line { stroke: var(--c); stroke-width: 2; }
+.mk-syn { fill: var(--syn); } .mk-data { fill: var(--data); } .mk-fin { fill: var(--fin); } .mk-ack { fill: var(--ack); }
+.lbl {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  max-width: 54%; background: var(--panel); border: 1px solid var(--border); border-radius: 7px;
+  padding: 2px 9px; font: 12px/1.45 var(--mono); text-align: center; white-space: nowrap;
+}
+.lbl:hover, .row.selected .lbl { border-color: var(--c); }
+.row.selected .lbl { box-shadow: 0 0 0 2px color-mix(in srgb, var(--c) 35%, transparent); }
+.lbl .fl { font-weight: 700; color: var(--c); }
+.lbl .nums { color: var(--muted); }
+.lbl .pl { display: block; overflow: hidden; text-overflow: ellipsis; color: var(--text); font-size: 11.5px; }
+.dot {
+  position: absolute; width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%;
+  background: var(--c); box-shadow: 0 0 0 4px color-mix(in srgb, var(--c) 25%, transparent); pointer-events: none;
+}
+.st { position: absolute; top: 50%; transform: translateY(-50%); max-width: calc(20% - 14px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.st.client { right: calc(80% + 9px); } .st.server { left: calc(80% + 9px); }
+.row.state { height: 26px; }
+.row.call { height: 24px; font: 11.5px/24px var(--mono); color: var(--muted); }
+.row.call span { position: absolute; max-width: 58%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row.call.client span { left: calc(20% + 10px); } .row.call.server span { right: calc(20% + 10px); }
+.row.phase { height: 40px; display: flex; align-items: center; justify-content: center; }
+.row.phase span {
+  position: relative; z-index: 1; background: var(--panel); padding: 2px 12px; border-radius: 999px; border: 1px solid var(--border);
+  font-size: 11px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; color: var(--muted);
+}
+.row.scenario { margin: 10px 12px 2px; padding: 8px 12px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 9px; z-index: 1; font-weight: 700; }
+.row.scenario small { display: block; font-weight: 400; color: var(--muted); font-family: var(--mono); font-size: 12px; }
+.row.note, .row.error { margin: 6px 12px; padding: 6px 12px; border-radius: 8px; z-index: 1; font-size: 13px; background: var(--panel); border: 1px solid var(--border); }
+.row.error { color: var(--err); border-color: var(--err); }
+
+.legend { display: flex; flex-wrap: wrap; gap: 14px; padding: 10px 14px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); }
+.legend span::before { content: ""; display: inline-block; width: 14px; height: 3px; border-radius: 2px; background: var(--c); vertical-align: middle; margin-right: 6px; }
+
+/* ---------- side panels ---------- */
+.details { font-size: 13px; }
+.details.empty-state { color: var(--muted); }
+.d-title { font-weight: 700; margin-bottom: 8px; }
+.flags { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 10px; }
+.flag { font: 600 11px/1.7 var(--mono); padding: 0 6px; border-radius: 4px; border: 1px solid var(--border); color: var(--muted); opacity: .55; }
+.flag.on { opacity: 1; color: var(--c); border-color: var(--c); background: color-mix(in srgb, var(--c) 12%, transparent); }
+dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; margin: 0 0 10px; }
+dt { color: var(--muted); } dd { margin: 0; font-family: var(--mono); font-size: 12.5px; word-break: break-all; }
+.info { margin: 0 0 8px; }
+.details h3 { font-size: 12px; margin: 10px 0 4px; color: var(--muted); font-weight: 600; }
+pre.box { margin: 0; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 8px; font: 11.5px/1.5 var(--mono); max-height: 180px; overflow: auto; white-space: pre-wrap; word-break: break-all; }
+pre.hex { white-space: pre; word-break: normal; }
+.console {
+  margin: 0; height: 200px; overflow: auto; background: var(--console-bg); color: var(--console-text);
+  border-radius: 8px; padding: 10px; font: 12px/1.55 var(--mono); white-space: pre-wrap; word-break: break-word;
+}
+.console .ts { color: var(--console-muted); }
+.console .sep { color: #7fa8ff; }
+.http-status { font: 600 13px var(--mono); margin-bottom: 8px; }
+.http-status.ok { color: var(--data); } .http-status.bad { color: var(--err); }
+iframe { width: 100%; height: 200px; border: 1px solid var(--border); border-radius: 8px; background: #fff; }
+
+/* ---------- packet table ---------- */
+.table-panel { margin-top: 16px; }
+.table-wrap { overflow: auto; max-height: 320px; }
+table { width: 100%; border-collapse: collapse; font: 12px/1.4 var(--mono); }
+th { position: sticky; top: 0; background: var(--panel); text-align: left; font-weight: 600; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+td { padding: 5px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+td.flags-cell { color: var(--c); font-weight: 700; }
+td.info-cell { white-space: normal; min-width: 220px; }
+tbody tr { cursor: pointer; box-shadow: inset 3px 0 0 var(--c); }
+tbody tr:hover { background: var(--panel-2); }
+tbody tr.selected { background: color-mix(in srgb, var(--c) 14%, transparent); }
+.footnote { color: var(--muted); font-size: 12px; margin-top: 14px; max-width: 900px; }
+
+@media (max-width: 1080px) {
+  .controls { grid-template-columns: 1fr 1fr; }
+  .grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 640px) {
+  .controls { grid-template-columns: minmax(0, 1fr); }
+  .seg { display: flex; } .seg button { flex: 1; padding: 6px 6px; }
+  .ladder { height: 70vh; }
+  .lbl { font-size: 11px; max-width: 58%; padding: 2px 6px; }
+  .st, .badge { font-size: 9px; padding: 0 4px; }
+}
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <marker id="ah-syn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path class="mk-syn" d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="ah-data" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path class="mk-data" d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="ah-fin" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path class="mk-fin" d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="ah-ack" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path class="mk-ack" d="M0,0 L10,5 L0,10 z"/></marker>
+  </defs>
+</svg>
+
+<div class="wrap">
+  <header>
+    <h1>TCP Live Lab</h1>
+    <p>Real sockets on 127.0.0.1 run your Q1 and Q2 programs: three-way handshake, data exchange and teardown, packet by packet.</p>
+  </header>
+
+  <section class="panel controls" aria-label="Simulation controls">
+    <div>
+      <div class="field"><label>Scenario</label></div>
+      <div class="seg" id="scenarioSeg">
+        <button type="button" data-scenario="q1" aria-pressed="true">Q1 · Echo</button>
+        <button type="button" data-scenario="q2" aria-pressed="false">Q2 · Web server</button>
+        <button type="button" data-scenario="all" aria-pressed="false">Run both</button>
+      </div>
+      <div style="margin-top:10px"><span class="status" id="status" data-kind="idle">Idle</span></div>
+    </div>
+
+    <div>
+      <div class="field" id="fieldMsgs">
+        <label for="msgs">Client messages <span>one per line</span></label>
+        <textarea id="msgs" rows="3">Hello server!
+How are you?
+bye</textarea>
+        <small>"bye" makes the server close first. Leave it out and the client closes first.</small>
+      </div>
+      <div class="field" id="fieldPath" hidden>
+        <label for="path">Requested file</label>
+        <input type="text" id="path" value="/HelloWorld.html" spellcheck="false">
+        <div class="chips">
+          <button type="button" data-path="/HelloWorld.html">/HelloWorld.html</button>
+          <button type="button" data-path="/missing.html">/missing.html</button>
+        </div>
+      </div>
+      <small id="allNote" hidden>Runs Q1 with the messages above, then Q2 for /HelloWorld.html (200) and /missing.html (404).</small>
+    </div>
+
+    <div class="field">
+      <label for="speed">Step delay <output id="speedOut">0.9 s</output></label>
+      <input type="range" id="speed" min="0.2" max="2" step="0.1" value="0.9">
+      <small>Pause between packets so you can follow along.</small>
+    </div>
+
+    <div class="actions">
+      <button type="button" class="btn primary" id="runBtn">▶ Run simulation</button>
+      <button type="button" class="btn" id="clearBtn">Clear</button>
+    </div>
+  </section>
+
+  <main class="grid">
+    <section class="panel ladder-panel" aria-label="Sequence diagram">
+      <div class="ladder-head">
+        <div class="host client">
+          <span class="role">Client</span>
+          <span class="addr" id="clientAddr">127.0.0.1 : ephemeral</span>
+          <span class="badge" id="clientState" data-fam="closed">CLOSED</span>
+        </div>
+        <div class="host server">
+          <span class="role" id="serverRole">Server</span>
+          <span class="addr" id="serverAddr">127.0.0.1 : —</span>
+          <span class="badge" id="serverState" data-fam="closed">CLOSED</span>
+        </div>
+      </div>
+      <div class="ladder" id="ladder">
+        <div id="rows"><div class="lifeline l"></div><div class="lifeline r"></div></div>
+        <div class="empty" id="empty">Press <b>&nbsp;Run simulation&nbsp;</b> to watch the packets flow.</div>
+      </div>
+      <div class="legend">
+        <span class="k-syn">SYN (open)</span>
+        <span class="k-data">Data (PSH)</span>
+        <span class="k-ack">ACK only</span>
+        <span class="k-fin">FIN (close)</span>
+      </div>
+    </section>
+
+    <aside class="side">
+      <section class="panel">
+        <h2>Packet details</h2>
+        <div id="details" class="details empty-state">Click any packet in the diagram or the list to inspect its TCP header and payload.</div>
+      </section>
+      <section class="panel">
+        <h2>Server console <span class="note">· real stdout</span></h2>
+        <pre class="console" id="console" aria-live="polite"></pre>
+      </section>
+      <section class="panel" id="previewPanel" hidden>
+        <h2>Browser view</h2>
+        <div class="http-status" id="httpStatus"></div>
+        <iframe id="preview" sandbox="" title="Rendered HTTP response"></iframe>
+      </section>
+    </aside>
+  </main>
+
+  <section class="panel table-panel">
+    <h2>Packet list</h2>
+    <div class="table-wrap">
+      <table id="table">
+        <thead><tr><th>No.</th><th>Time (s)</th><th>Source</th><th>Destination</th><th>Flags</th><th>Seq</th><th>Ack</th><th>Len</th><th>Info</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <p class="footnote">
+    Every connection, payload and server log line here is real: <code>web_sim.py</code> starts your server scripts and drives a real client socket.
+    The operating system sends the SYN, ACK and FIN control segments inside <code>connect()</code> and <code>close()</code>, where Python can't see them,
+    so they are drawn when the matching socket call happens. Sequence and acknowledgement numbers follow TCP rules, using random initial sequence numbers
+    and the real payload sizes. They are shown relative to the start of the connection, as in Wireshark.
+  </p>
+</div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const rowsEl = $('#rows'), ladder = $('#ladder'), tbody = $('#table tbody'), consoleEl = $('#console');
+const runBtn = $('#runBtn');
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const SVG_NS = 'http://www.w3.org/2000/svg';
+let scenario = 'q1', es = null, packets = new Map(), selectedNo = null, delay = 0.9, hadError = false;
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+const kindOf = (p) => p.flags.includes('SYN') ? 'syn' : p.flags.includes('FIN') ? 'fin' : p.len > 0 ? 'data' : 'ack';
+const famOf = (s) => s === 'ESTABLISHED' ? 'est' : s === 'LISTEN' ? 'listen' : s.startsWith('SYN') ? 'syn' : s === 'CLOSED' ? 'closed' : 'fin';
+const secs = (ms) => (ms / 1000).toFixed(3);
+
+/* ---------- controls ---------- */
+document.querySelectorAll('#scenarioSeg button').forEach((b) => b.addEventListener('click', () => {
+  if (es) return;
+  scenario = b.dataset.scenario;
+  document.querySelectorAll('#scenarioSeg button').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+  $('#fieldMsgs').hidden = scenario === 'q2';
+  $('#fieldPath').hidden = scenario !== 'q2';
+  $('#allNote').hidden = scenario !== 'all';
+}));
+document.querySelectorAll('.chips button').forEach((b) => b.addEventListener('click', () => { $('#path').value = b.dataset.path; }));
+$('#speed').addEventListener('input', (e) => { delay = +e.target.value; $('#speedOut').textContent = delay.toFixed(1) + ' s'; });
+$('#clearBtn').addEventListener('click', () => { if (!es) clearAll(); });
+runBtn.addEventListener('click', () => (es ? stopRun('Stopped') : startRun()));
+
+function setRunning(on) {
+  runBtn.textContent = on ? '■ Stop' : '▶ Run simulation';
+  runBtn.classList.toggle('stop', on);
+  $('#clearBtn').disabled = on;
+  ['#msgs', '#path', '#speed'].forEach((s) => { $(s).disabled = on; });
+}
+function setStatus(kind, text) { const s = $('#status'); s.dataset.kind = kind; s.textContent = text; }
+
+function startRun() {
+  clearAll();
+  hadError = false;
+  const q = new URLSearchParams({ scenario, delay: String(delay) });
+  if (scenario !== 'q2') $('#msgs').value.split('\n').map((s) => s.trim()).filter(Boolean).forEach((m) => q.append('msg', m));
+  if (scenario === 'q2') q.set('path', $('#path').value.trim() || '/');
+  setStatus('run', 'Running…');
+  setRunning(true);
+  es = new EventSource('/api/run?' + q);
+  es.onmessage = (e) => handle(JSON.parse(e.data));
+  es.onerror = () => {
+    if (!es) return;
+    addBanner('error', 'Lost connection to web_sim.py. Check that it is still running in the terminal; only one simulation can run at a time.');
+    stopRun('Error', 'error');
+  };
+}
+function stopRun(text, kind = 'idle') {
+  if (es) es.close();
+  es = null;
+  setRunning(false);
+  setStatus(kind, text);
+}
+
+function clearAll() {
+  rowsEl.querySelectorAll('.row').forEach((r) => r.remove());
+  tbody.replaceChildren();
+  consoleEl.replaceChildren();
+  packets.clear(); selectedNo = null;
+  const d = $('#details');
+  d.className = 'details empty-state';
+  d.textContent = 'Click any packet in the diagram or the list to inspect its TCP header and payload.';
+  $('#previewPanel').hidden = true;
+  $('#empty').hidden = false;
+  setBadge('client', 'CLOSED'); setBadge('server', 'CLOSED');
+  setStatus('idle', 'Idle');
+}
+
+/* ---------- event stream ---------- */
+function handle(ev) {
+  switch (ev.type) {
+    case 'scenario':
+      addScenario(ev); break;
+    case 'conn':
+      $('#clientAddr').textContent = `${ev.host} : ${ev.clientPort}`;
+      setBadge('client', 'CLOSED'); break;
+    case 'phase':
+      addPhase(ev.title); break;
+    case 'call':
+      addCall(ev.side, ev.text); break;
+    case 'state':
+      setBadge(ev.side, ev.state); addStateTag(ev.side, ev.state); break;
+    case 'packet':
+      packets.set(ev.no, ev); addPacket(ev); break;
+    case 'log':
+      addLog(ev.t, ev.text); break;
+    case 'http':
+      showHttp(ev); break;
+    case 'error':
+      hadError = true; addBanner('error', ev.text); break;
+    case 'done':
+      if (!hadError) addBanner('note', `Simulation finished: ${packets.size} packets in ${secs(ev.t)} s.`);
+      stopRun(hadError ? 'Finished with an error' : 'Done', hadError ? 'error' : 'done');
+      break;
+  }
+}
+
+/* ---------- ladder rows ---------- */
+function appendRow(row) {
+  $('#empty').hidden = true;
+  const atBottom = ladder.scrollHeight - ladder.scrollTop - ladder.clientHeight < 140;
+  rowsEl.appendChild(row);
+  if (atBottom) ladder.scrollTo({ top: ladder.scrollHeight, behavior: reduceMotion ? 'auto' : 'smooth' });
+  return row;
+}
+function addScenario(ev) {
+  $('#serverRole').textContent = `Server · ${ev.script}`;
+  $('#serverAddr').textContent = `127.0.0.1 : ${ev.serverPort}`;
+  $('#clientAddr').textContent = '127.0.0.1 : ephemeral';
+  setBadge('client', 'CLOSED'); setBadge('server', 'CLOSED');
+  const row = el('div', 'row scenario', ev.title);
+  row.append(el('small', '', `python ${ev.script}  →  listening on port ${ev.serverPort}`));
+  appendRow(row);
+  const line = el('div', 'sep', `── ${ev.title} ──`);
+  consoleEl.append(line, '\n');
+}
+function addPhase(title) { const r = el('div', 'row phase'); r.append(el('span', '', title)); appendRow(r); }
+function addCall(side, text) { const r = el('div', `row call ${side}`); r.append(el('span', '', text)); appendRow(r); }
+function addBanner(kind, text) { appendRow(el('div', `row ${kind}`, text)); }
+
+function addStateTag(side, state) {
+  const last = rowsEl.lastElementChild;
+  let row = last && (last.classList.contains('pkt') || last.classList.contains('state')) && !last.querySelector(`.st.${side}`) ? last : null;
+  if (!row) row = appendRow(el('div', 'row state'));
+  const tag = el('span', `st ${side}`, state);
+  tag.dataset.fam = famOf(state);
+  tag.title = `${side === 'client' ? 'Client' : 'Server'} state: ${state}`;
+  row.append(tag);
+}
+function setBadge(side, state) {
+  const b = $(`#${side}State`);
+  if (b.textContent === state) return;
+  b.textContent = state;
+  b.dataset.fam = famOf(state);
+  b.classList.remove('flash'); void b.offsetWidth; b.classList.add('flash');
+}
+
+function preview(text) {
+  const s = text.replace(/\r/g, '\\r').replace(/\n/g, '\\n');
+  return '"' + (s.length > 42 ? s.slice(0, 42) + '…' : s) + '"';
+}
+function addPacket(p) {
+  const kind = kindOf(p), c2s = p.src === 'client';
+  const row = el('div', `row pkt k-${kind}${p.len ? ' tall' : ''}`);
+  row.dataset.no = p.no;
+
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('aria-hidden', 'true');
+  const line = document.createElementNS(SVG_NS, 'line');
+  const [xa, xb] = c2s ? ['20%', '80%'] : ['80%', '20%'];
+  line.setAttribute('x1', xa); line.setAttribute('y1', '16%');
+  line.setAttribute('x2', xb); line.setAttribute('y2', '84%');
+  svg.append(line);
+  row.append(svg);
+
+  const lbl = el('button', 'lbl');
+  lbl.type = 'button';
+  lbl.title = p.info;
+  const nums = ` Seq=${p.relSeq}` + (p.relAck != null ? ` Ack=${p.relAck}` : '') + ` Len=${p.len}`;
+  lbl.append(el('span', 'fl', p.flags.join(', ')), el('span', 'nums', nums));
+  if (p.len) lbl.append(el('span', 'pl', preview(p.payload)));
+  lbl.addEventListener('click', () => select(p.no));
+  row.append(lbl);
+
+  appendRow(row);
+  animatePacket(row, line, lbl, c2s, kind);
+  addTableRow(p, kind);
+}
+function animatePacket(row, line, lbl, c2s, kind) {
+  const marker = `url(#ah-${kind})`;
+  if (reduceMotion) { line.setAttribute('marker-end', marker); return; }
+  const dur = Math.max(200, Math.min(900, delay * 700));
+  let len = 0;
+  try { len = line.getTotalLength(); } catch (e) { /* keep the static line */ }
+  if (len) {
+    line.style.strokeDasharray = len;
+    line.animate([{ strokeDashoffset: len }, { strokeDashoffset: 0 }], { duration: dur, easing: 'ease-in-out' })
+      .onfinish = () => { line.style.strokeDasharray = ''; line.setAttribute('marker-end', marker); };
+  } else {
+    line.setAttribute('marker-end', marker);
+  }
+  lbl.animate([{ opacity: 0 }, { opacity: 1 }], { duration: dur * 0.6, delay: dur * 0.4, fill: 'backwards' });
+  const dot = el('div', 'dot');
+  row.append(dot);
+  const [x0, x1] = c2s ? ['20%', '80%'] : ['80%', '20%'];
+  dot.animate([{ left: x0, top: '16%' }, { left: x1, top: '84%' }], { duration: dur, easing: 'ease-in-out', fill: 'forwards' })
+    .onfinish = () => dot.remove();
+}
+
+/* ---------- packet table + details ---------- */
+function addTableRow(p, kind) {
+  const tr = el('tr', `k-${kind}`);
+  tr.dataset.no = p.no;
+  const src = p.src === 'client' ? `client:${p.srcPort}` : `server:${p.srcPort}`;
+  const dst = p.src === 'client' ? `server:${p.dstPort}` : `client:${p.dstPort}`;
+  [p.no, secs(p.t), src, dst, p.flags.join(', '), p.relSeq, p.relAck ?? '', p.len, p.info].forEach((v, i) => {
+    tr.append(el('td', i === 4 ? 'flags-cell' : i === 8 ? 'info-cell' : '', String(v)));
+  });
+  tr.addEventListener('click', () => select(p.no));
+  tbody.append(tr);
+  const wrap = tbody.closest('.table-wrap');
+  wrap.scrollTop = wrap.scrollHeight;
+}
+function select(no) {
+  selectedNo = no;
+  document.querySelectorAll('.row.selected, tbody tr.selected').forEach((e) => e.classList.remove('selected'));
+  rowsEl.querySelector(`.row[data-no="${no}"]`)?.classList.add('selected');
+  tbody.querySelector(`tr[data-no="${no}"]`)?.classList.add('selected');
+  renderDetails(packets.get(no));
+}
+function hexdump(hex) {
+  const bytes = hex.match(/../g) || [];
+  const out = [];
+  for (let i = 0; i < bytes.length; i += 16) {
+    const chunk = bytes.slice(i, i + 16);
+    const ascii = chunk.map((b) => { const c = parseInt(b, 16); return c >= 32 && c < 127 ? String.fromCharCode(c) : '.'; }).join('');
+    out.push(i.toString(16).padStart(4, '0') + '  ' + chunk.join(' ').padEnd(48) + ' ' + ascii);
+  }
+  return out.join('\n');
+}
+function renderDetails(p) {
+  const d = $('#details');
+  d.className = `details k-${kindOf(p)}`;
+  d.replaceChildren();
+  d.append(el('div', 'd-title', `Packet #${p.no} · ${p.src === 'client' ? 'Client → Server' : 'Server → Client'}`));
+  const flags = el('div', 'flags');
+  ['URG', 'ACK', 'PSH', 'RST', 'SYN', 'FIN'].forEach((f) => flags.append(el('span', 'flag' + (p.flags.includes(f) ? ' on' : ''), f)));
+  d.append(flags);
+  const dl = el('dl');
+  [
+    ['Source port', p.srcPort],
+    ['Dest. port', p.dstPort],
+    ['Sequence no.', `${p.seq}  (relative ${p.relSeq})`],
+    ['Ack no.', p.ack == null ? '— (ACK flag not set)' : `${p.ack}  (relative ${p.relAck})`],
+    ['Payload', `${p.len} bytes`],
+    ['Time', `+${secs(p.t)} s`],
+  ].forEach(([k, v]) => dl.append(el('dt', '', k), el('dd', '', String(v))));
+  d.append(dl, el('p', 'info', p.info));
+  if (p.len) {
+    d.append(el('h3', '', 'Payload (text)'), el('pre', 'box', p.payload));
+    d.append(el('h3', '', 'Payload (hex)'), el('pre', 'box hex', hexdump(p.hex)));
+  }
+}
+
+/* ---------- console + browser preview ---------- */
+function addLog(t, text) {
+  consoleEl.append(el('span', 'ts', `[+${secs(t)}] `), text, '\n');
+  consoleEl.scrollTop = consoleEl.scrollHeight;
+}
+function showHttp(ev) {
+  $('#previewPanel').hidden = false;
+  const s = $('#httpStatus');
+  s.textContent = `GET ${ev.path}  →  ${ev.status}`;
+  s.className = 'http-status ' + (/ 2\d\d /.test(ev.status + ' ') ? 'ok' : 'bad');
+  $('#preview').srcdoc = ev.body;
+}
+
+/* ---------- autorun: /?run=q1|q2|all&delay=0.5 ---------- */
+const params = new URLSearchParams(location.search);
+if (params.has('delay')) { $('#speed').value = params.get('delay'); $('#speed').dispatchEvent(new Event('input')); }
+if (params.has('run')) {
+  document.querySelector(`#scenarioSeg button[data-scenario="${params.get('run')}"]`)?.click();
+  startRun();
+}
+</script>
+</body>
+</html>
